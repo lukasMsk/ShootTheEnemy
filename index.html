@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Shoot the Enemy</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+      --bg: #0b0e1a;
+      --fg: #f4f7ff;
+      --accent: #3dd5f3;
+      --accent-dark: #1a8fa5;
+      --danger: #ff6b6b;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: radial-gradient(circle at top, rgba(61, 213, 243, 0.15), transparent 55%),
+        radial-gradient(circle at bottom, rgba(255, 107, 107, 0.1), transparent 60%),
+        var(--bg);
+      color: var(--fg);
+    }
+
+    h1 {
+      margin-bottom: 0.25rem;
+      text-transform: uppercase;
+      letter-spacing: 0.3rem;
+      font-weight: 700;
+    }
+
+    p {
+      margin: 0.25rem 0;
+    }
+
+    .hud {
+      display: flex;
+      gap: 2rem;
+      margin-bottom: 1rem;
+      font-weight: 600;
+      text-shadow: 0 0 8px rgba(61, 213, 243, 0.65);
+    }
+
+    canvas {
+      border: 2px solid rgba(61, 213, 243, 0.4);
+      border-radius: 12px;
+      background: rgba(7, 9, 18, 0.92);
+      box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+    }
+
+    .controls {
+      margin-top: 1.5rem;
+      padding: 1rem 1.5rem;
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      max-width: min(90vw, 480px);
+      text-align: center;
+      line-height: 1.6;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      padding: 0.35rem 0.75rem;
+      border-radius: 999px;
+      background: rgba(61, 213, 243, 0.15);
+      border: 1px solid rgba(61, 213, 243, 0.4);
+      font-size: 0.85rem;
+      font-weight: 600;
+    }
+
+    button {
+      margin-top: 1rem;
+      padding: 0.6rem 1.5rem;
+      border-radius: 999px;
+      border: none;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      background: linear-gradient(120deg, var(--accent), var(--accent-dark));
+      color: #05121f;
+      box-shadow: 0 8px 20px rgba(61, 213, 243, 0.4);
+      transition: transform 120ms ease, box-shadow 120ms ease;
+    }
+
+    button:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 12px 26px rgba(61, 213, 243, 0.55);
+    }
+
+    button:active {
+      transform: translateY(1px);
+      box-shadow: 0 6px 16px rgba(61, 213, 243, 0.35);
+    }
+
+    @media (max-width: 600px) {
+      canvas {
+        width: 90vw;
+        height: 60vh;
+      }
+
+      .hud {
+        flex-direction: column;
+        align-items: center;
+        gap: 0.5rem;
+      }
+    }
+  </style>
+</head>
+<body>
+  <h1>Shoot the Enemy</h1>
+  <p class="badge">Pfeiltasten / WASD: Bewegen &nbsp;•&nbsp; Leertaste: Schießen</p>
+  <div class="hud">
+    <div>Punkte: <span id="score">0</span></div>
+    <div>Welle: <span id="wave">1</span></div>
+    <div>Leben: <span id="lives">3</span></div>
+  </div>
+  <canvas id="gameCanvas" width="720" height="480" aria-label="Spielfläche"></canvas>
+  <div class="controls">
+    <strong>So funktioniert's:</strong>
+    <p>Steuere dein Raumschiff und schieße alle Gegner ab, bevor sie den Boden erreichen. Mit jeder Welle erscheinen mehr Gegner – halte so lange wie möglich durch!</p>
+    <button id="restart">Neustart</button>
+  </div>
+
+  <script>
+    const canvas = document.getElementById("gameCanvas");
+    const ctx = canvas.getContext("2d");
+
+    const hud = {
+      score: document.getElementById("score"),
+      wave: document.getElementById("wave"),
+      lives: document.getElementById("lives"),
+    };
+
+    const restartBtn = document.getElementById("restart");
+
+    const settings = {
+      playerSpeed: 5,
+      bulletSpeed: 7,
+      enemySpeed: 1.2,
+      enemyAcceleration: 0.08,
+      enemyPerWave: 5,
+      maxLives: 3,
+    };
+
+    const colors = {
+      player: "#3dd5f3",
+      bullet: "#f9f871",
+      enemy: "#ff6b6b",
+      background: "#05070f",
+      stars: "rgba(255,255,255,0.35)",
+      textShadow: "rgba(61,213,243,0.4)",
+    };
+
+    const keys = new Set();
+
+    const stars = Array.from({ length: 100 }, () => ({
+      x: Math.random() * canvas.width,
+      y: Math.random() * canvas.height,
+      radius: Math.random() * 1.5,
+      speed: 0.2 + Math.random() * 0.4,
+    }));
+
+    let player;
+    let bullets;
+    let enemies;
+    let score;
+    let wave;
+    let lives;
+    let spawnTimer;
+    let waveEnemies;
+    let gameOver = false;
+
+    function initGame() {
+      player = {
+        x: canvas.width / 2 - 16,
+        y: canvas.height - 60,
+        width: 32,
+        height: 32,
+        speed: settings.playerSpeed,
+        cooldown: 0,
+      };
+
+      bullets = [];
+      enemies = [];
+      score = 0;
+      wave = 1;
+      lives = settings.maxLives;
+      spawnTimer = 0;
+      waveEnemies = 0;
+      gameOver = false;
+      hud.score.textContent = score;
+      hud.wave.textContent = wave;
+      hud.lives.textContent = lives;
+    }
+
+    function createEnemy() {
+      const width = 32 + Math.random() * 20;
+      const height = 24 + Math.random() * 12;
+      const x = Math.random() * (canvas.width - width);
+      const speed = settings.enemySpeed + (wave - 1) * settings.enemyAcceleration;
+      enemies.push({
+        x,
+        y: -height,
+        width,
+        height,
+        speed,
+        hp: 1 + Math.floor(wave / 3),
+        color: colors.enemy,
+      });
+    }
+
+    function shootBullet() {
+      if (player.cooldown > 0) return;
+      bullets.push({
+        x: player.x + player.width / 2 - 3,
+        y: player.y,
+        width: 6,
+        height: 14,
+        speed: settings.bulletSpeed,
+      });
+      player.cooldown = 12;
+    }
+
+    function updateStars(delta) {
+      for (const star of stars) {
+        star.y += star.speed * delta;
+        if (star.y > canvas.height) star.y = -star.radius;
+      }
+    }
+
+    function updatePlayer() {
+      if (keys.has("ArrowLeft") || keys.has("a")) {
+        player.x -= player.speed;
+      }
+      if (keys.has("ArrowRight") || keys.has("d")) {
+        player.x += player.speed;
+      }
+      if (keys.has("ArrowUp") || keys.has("w")) {
+        player.y -= player.speed;
+      }
+      if (keys.has("ArrowDown") || keys.has("s")) {
+        player.y += player.speed;
+      }
+      player.x = Math.max(0, Math.min(canvas.width - player.width, player.x));
+      player.y = Math.max(canvas.height * 0.35, Math.min(canvas.height - player.height, player.y));
+      if (player.cooldown > 0) player.cooldown--;
+    }
+
+    function updateBullets() {
+      bullets = bullets
+        .map((bullet) => ({ ...bullet, y: bullet.y - bullet.speed }))
+        .filter((bullet) => bullet.y + bullet.height > 0);
+    }
+
+    function updateEnemies(delta) {
+      for (const enemy of enemies) {
+        enemy.y += enemy.speed * delta * 0.06;
+      }
+      const reachedBottom = enemies.filter((enemy) => enemy.y > canvas.height);
+      if (reachedBottom.length) {
+        lives -= reachedBottom.length;
+        hud.lives.textContent = Math.max(lives, 0);
+        enemies = enemies.filter((enemy) => enemy.y <= canvas.height);
+        if (lives <= 0) {
+          gameOver = true;
+        }
+      }
+    }
+
+    function detectCollisions() {
+      bullets.forEach((bullet) => {
+        enemies.forEach((enemy) => {
+          if (
+            bullet.x < enemy.x + enemy.width &&
+            bullet.x + bullet.width > enemy.x &&
+            bullet.y < enemy.y + enemy.height &&
+            bullet.y + bullet.height > enemy.y
+          ) {
+            enemy.hp -= 1;
+            bullet.hit = true;
+            if (enemy.hp <= 0) {
+              enemy.dead = true;
+              score += 10;
+              hud.score.textContent = score;
+            }
+          }
+        });
+      });
+      bullets = bullets.filter((bullet) => !bullet.hit);
+      enemies = enemies.filter((enemy) => !enemy.dead);
+    }
+
+    function spawnWave(delta) {
+      if (gameOver) return;
+      spawnTimer += delta;
+      const targetCount = settings.enemyPerWave + (wave - 1) * 2;
+      if (spawnTimer > 700 && waveEnemies < targetCount) {
+        createEnemy();
+        spawnTimer = 0;
+        waveEnemies++;
+      }
+      if (waveEnemies >= targetCount && enemies.length === 0) {
+        wave++;
+        hud.wave.textContent = wave;
+        waveEnemies = 0;
+      }
+    }
+
+    function drawBackground() {
+      ctx.fillStyle = colors.background;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = colors.stars;
+      for (const star of stars) {
+        ctx.beginPath();
+        ctx.arc(star.x, star.y, star.radius, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    function drawPlayer() {
+      ctx.fillStyle = colors.player;
+      ctx.shadowColor = colors.textShadow;
+      ctx.shadowBlur = 15;
+      ctx.fillRect(player.x, player.y, player.width, player.height);
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = "rgba(255,255,255,0.35)";
+      ctx.fillRect(player.x + player.width / 2 - 3, player.y - 10, 6, 12);
+    }
+
+    function drawBullets() {
+      ctx.fillStyle = colors.bullet;
+      bullets.forEach((bullet) => {
+        ctx.fillRect(bullet.x, bullet.y, bullet.width, bullet.height);
+      });
+    }
+
+    function drawEnemies() {
+      enemies.forEach((enemy) => {
+        ctx.fillStyle = enemy.color;
+        ctx.fillRect(enemy.x, enemy.y, enemy.width, enemy.height);
+        ctx.fillStyle = "rgba(255, 255, 255, 0.3)";
+        ctx.fillRect(enemy.x + 4, enemy.y + 4, enemy.width - 8, 4);
+      });
+    }
+
+    function drawGameOver() {
+      ctx.fillStyle = "rgba(5, 7, 15, 0.9)";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = "#ffffff";
+      ctx.textAlign = "center";
+      ctx.shadowColor = colors.textShadow;
+      ctx.shadowBlur = 18;
+      ctx.font = "bold 42px 'Segoe UI', sans-serif";
+      ctx.fillText("Game Over", canvas.width / 2, canvas.height / 2 - 20);
+      ctx.font = "600 24px 'Segoe UI', sans-serif";
+      ctx.fillText(`Punkte: ${score}`, canvas.width / 2, canvas.height / 2 + 20);
+      ctx.shadowBlur = 0;
+    }
+
+    let lastTime = performance.now();
+
+    function loop(timestamp) {
+      const delta = timestamp - lastTime;
+      lastTime = timestamp;
+
+      updateStars(delta);
+      drawBackground();
+
+      if (!gameOver) {
+        updatePlayer();
+        updateBullets();
+        updateEnemies(delta);
+        detectCollisions();
+        spawnWave(delta);
+        drawPlayer();
+        drawBullets();
+        drawEnemies();
+      } else {
+        drawGameOver();
+      }
+
+      requestAnimationFrame(loop);
+    }
+
+    window.addEventListener("keydown", (event) => {
+      keys.add(event.key);
+      if (event.key === " " || event.key === "Spacebar") {
+        event.preventDefault();
+        shootBullet();
+      }
+    });
+
+    window.addEventListener("keyup", (event) => {
+      keys.delete(event.key);
+    });
+
+    restartBtn.addEventListener("click", () => {
+      initGame();
+    });
+
+    initGame();
+    requestAnimationFrame(loop);
+  </script>
+</body>
+</html>
